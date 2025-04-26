@@ -23,6 +23,7 @@ from typing import get_args
 from typing import get_origin
 from typing import Literal
 from typing import Union
+from datetime import date
 
 from google.genai import types
 import pydantic
@@ -34,6 +35,7 @@ _py_builtin_type_to_schema_type = {
     bool: types.Type.BOOLEAN,
     list: types.Type.ARRAY,
     dict: types.Type.OBJECT,
+    date: types.Type.STRING,
 }
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,8 @@ def _is_default_value_compatible(
 ) -> bool:
   # None type is expected to be handled external to this function
   if _is_builtin_primitive_or_compound(annotation):
+    if annotation is date:
+      return isinstance(default_value, date)
     return isinstance(default_value, annotation)
 
   if (
@@ -131,8 +135,14 @@ def _parse_schema_from_parameter(
     if param.default is not inspect.Parameter.empty:
       if not _is_default_value_compatible(param.default, param.annotation):
         raise ValueError(default_value_error_msg)
-      schema.default = param.default
+      # this handles regular date fields
+      if param.annotation is date:
+        schema.default = param.default.isoformat()
+      else:
+        schema.default = param.default
     schema.type = _py_builtin_type_to_schema_type[param.annotation]
+    if param.annotation is date:
+      schema.format = "date-time"
     _raise_if_schema_unsupported(variant, schema)
     return schema
   if (
@@ -141,8 +151,21 @@ def _parse_schema_from_parameter(
       # need to also handle typing_types.UnionType, since it's not identical to Union
       # using T | T (UnionType) is not the same as Union[T, T] (Union)
   ):
-    # handle Enum type
+    # handle date type
     args = get_args(param.annotation)
+    # Handle Optional[date] and Union types with date
+    date_types = [arg for arg in args if arg is date]
+    if date_types:
+      schema.type = types.Type.STRING
+      schema.format = "date-time"
+      if type(None) in args:
+        schema.nullable = True
+      if param.default is not inspect.Parameter.empty and param.default is not None:
+        schema.default = param.default.isoformat() if isinstance(param.default, date) else param.default
+      _raise_if_schema_unsupported(variant, schema)
+      return schema
+    
+    # Handle Enum type
     enum_types = [arg for arg in args if (inspect.isclass(arg) and issubclass(arg, Enum))]
     if enum_types:
       schema.type = types.Type.STRING

@@ -15,6 +15,7 @@
 from enum import Enum
 import inspect
 from typing import Any, Callable, Optional, Union, get_args
+from datetime import date
 
 from google.genai import types
 from typing_extensions import override
@@ -74,6 +75,13 @@ class FunctionTool(BaseTool):
           enum_class = annotation
           string_value = args_to_call[param_name]
           args_to_call[param_name] = enum_class[string_value]
+        
+        # Handle dates (from date library)
+        elif annotation is date and isinstance(args_to_call[param_name], str):
+          try:
+            args_to_call[param_name] = date.fromisoformat(args_to_call[param_name])
+          except ValueError as e:
+            return {'error': f"Invalid date format for parameter '{param_name}'. Expected YYYY-MM-DD format: {str(e)}"}
 
     if 'tool_context' in signature.parameters:
       args_to_call['tool_context'] = tool_context
