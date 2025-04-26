@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from enum import Enum
 import inspect
-from typing import Any
-from typing import Callable
-from typing import Optional
+from typing import Any, Callable, Optional, Union, get_args
 
 from google.genai import types
 from typing_extensions import override
@@ -56,6 +55,26 @@ class FunctionTool(BaseTool):
   ) -> Any:
     args_to_call = args.copy()
     signature = inspect.signature(self.func)
+
+    # I don't really know where to put this
+    # If we're also gonna support datetime and other non-primitive types in the future maybe just break this into a bigger helper method
+    # if we have any enum values, we need to convert them to the enum member
+    for param_name, param in signature.parameters.items():
+      if param_name in args_to_call:
+        annotation = param.annotation
+        # Handle Union[EnumType, None] (Optional) case
+        if hasattr(annotation, '__origin__') and annotation.__origin__ is Union:
+          types = get_args(annotation)
+          # Get the type in the Unionthat's not None
+          actual_type = next((t for t in types if t is not type(None)), None)
+          if actual_type:
+            annotation = actual_type
+        
+        if inspect.isclass(annotation) and issubclass(annotation, Enum):
+          enum_class = annotation
+          string_value = args_to_call[param_name]
+          args_to_call[param_name] = enum_class[string_value]
+
     if 'tool_context' in signature.parameters:
       args_to_call['tool_context'] = tool_context
 

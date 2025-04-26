@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 
+from enum import Enum
 import inspect
 import logging
 import types as typing_types
@@ -136,45 +137,63 @@ def _parse_schema_from_parameter(
     return schema
   if (
       get_origin(param.annotation) is Union
+      or isinstance(param.annotation, typing_types.UnionType)
+      # need to also handle typing_types.UnionType, since it's not identical to Union
+      # using T | T (UnionType) is not the same as Union[T, T] (Union)
+  ):
+    # handle Enum type
+    args = get_args(param.annotation)
+    enum_types = [arg for arg in args if (inspect.isclass(arg) and issubclass(arg, Enum))]
+    if enum_types:
+      schema.type = types.Type.STRING
+      schema.enum = [e.name for e in enum_types[0]]
+      # If None is in the union args, it's Optional
+      if type(None) in args:
+        schema.nullable = True
+      if param.default is not inspect.Parameter.empty and param.default is not None:
+        schema.default = param.default
+      _raise_if_schema_unsupported(variant, schema)
+      return schema
+    if (
       # only parse simple UnionType, example int | str | float | bool
       # complex types.UnionType will be invoked in raise branch
-      and all(
+      all(
           (_is_builtin_primitive_or_compound(arg) or arg is type(None))
           for arg in get_args(param.annotation)
       )
-  ):
-    schema.type = types.Type.OBJECT
-    schema.any_of = []
-    unique_types = set()
-    for arg in get_args(param.annotation):
-      if arg.__name__ == 'NoneType':  # Optional type
-        schema.nullable = True
-        continue
-      schema_in_any_of = _parse_schema_from_parameter(
-          variant,
-          inspect.Parameter(
-              'item', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=arg
-          ),
-          func_name,
-      )
-      if (
-          schema_in_any_of.model_dump_json(exclude_none=True)
-          not in unique_types
-      ):
-        schema.any_of.append(schema_in_any_of)
-        unique_types.add(schema_in_any_of.model_dump_json(exclude_none=True))
-    if len(schema.any_of) == 1:  # param: list | None -> Array
-      schema.type = schema.any_of[0].type
-      schema.any_of = None
-    if (
-        param.default is not inspect.Parameter.empty
-        and param.default is not None
     ):
-      if not _is_default_value_compatible(param.default, param.annotation):
-        raise ValueError(default_value_error_msg)
-      schema.default = param.default
-    _raise_if_schema_unsupported(variant, schema)
-    return schema
+      schema.type = types.Type.OBJECT
+      schema.any_of = []
+      unique_types = set()
+      for arg in args:
+        if arg.__name__ == 'NoneType':  # Optional type
+          schema.nullable = True
+          continue
+        schema_in_any_of = _parse_schema_from_parameter(
+            variant,
+            inspect.Parameter(
+                'item', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=arg
+            ),
+            func_name,
+        )
+        if (
+            schema_in_any_of.model_dump_json(exclude_none=True)
+            not in unique_types
+        ):
+          schema.any_of.append(schema_in_any_of)
+          unique_types.add(schema_in_any_of.model_dump_json(exclude_none=True))
+      if len(schema.any_of) == 1:  # param: list | None -> Array
+        schema.type = schema.any_of[0].type
+        schema.any_of = None
+      if (
+          param.default is not inspect.Parameter.empty
+          and param.default is not None
+      ):
+        if not _is_default_value_compatible(param.default, param.annotation):
+          raise ValueError(default_value_error_msg)
+        schema.default = param.default
+      _raise_if_schema_unsupported(variant, schema)
+      return schema
   if isinstance(param.annotation, _GenericAlias) or isinstance(
       param.annotation, typing_types.GenericAlias
   ):
@@ -289,6 +308,17 @@ def _parse_schema_from_parameter(
       )
     _raise_if_schema_unsupported(variant, schema)
     return schema
+
+  # Enum Type
+  if isinstance(param.annotation, type(Enum)):
+    schema.type = types.Type.STRING
+    schema.enum = [e.name for e in param.annotation]
+    if param.default is not inspect.Parameter.empty and param.default is not None:
+      schema.default = param.default
+
+    _raise_if_schema_unsupported(variant, schema)
+    return schema
+
   raise ValueError(
       f'Failed to parse the parameter {param} of function {func_name} for'
       ' automatic function calling. Automatic function calling works best with'
