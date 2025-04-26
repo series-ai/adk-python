@@ -58,25 +58,35 @@ class FunctionTool(BaseTool):
     signature = inspect.signature(self.func)
 
     # I don't really know where to put this
+    # this is insanely bad
     # If we're also gonna support datetime and other non-primitive types in the future maybe just break this into a bigger helper method
     # if we have any enum values, we need to convert them to the enum member
     for param_name, param in signature.parameters.items():
       if param_name in args_to_call:
         annotation = param.annotation
-        # Handle Union[EnumType, None] (Optional) case
+        # Unwrap Optional (Union[T, None]) to get to the inner type
         if hasattr(annotation, '__origin__') and annotation.__origin__ is Union:
           types = get_args(annotation)
-          # Get the type in the Unionthat's not None
+          # Get the type that's not None
           actual_type = next((t for t in types if t is not type(None)), None)
           if actual_type:
             annotation = actual_type
+
+        # Handle List[EnumType] and Optional[List[EnumType]] case
+        if hasattr(annotation, '__origin__') and annotation.__origin__ is list:
+          item_type = get_args(annotation)[0]
+          if inspect.isclass(item_type) and issubclass(item_type, Enum):
+            if args_to_call[param_name] is not None:
+              args_to_call[param_name] = [item_type[val] for val in args_to_call[param_name]]
+            continue
         
+        # Handle regular Enum case
         if inspect.isclass(annotation) and issubclass(annotation, Enum):
           enum_class = annotation
           string_value = args_to_call[param_name]
           args_to_call[param_name] = enum_class[string_value]
         
-        # Handle dates (from date library)
+        # Handle dates (from date library). I think optional dates might not be covered by this
         elif annotation is date and isinstance(args_to_call[param_name], str):
           try:
             args_to_call[param_name] = date.fromisoformat(args_to_call[param_name])

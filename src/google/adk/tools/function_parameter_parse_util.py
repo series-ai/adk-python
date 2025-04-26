@@ -245,15 +245,24 @@ def _parse_schema_from_parameter(
       return schema
     if origin is list:
       schema.type = types.Type.ARRAY
-      schema.items = _parse_schema_from_parameter(
-          variant,
-          inspect.Parameter(
-              'item',
-              inspect.Parameter.POSITIONAL_OR_KEYWORD,
-              annotation=args[0],
-          ),
-          func_name,
-      )
+      item_type = args[0]
+      
+      if inspect.isclass(item_type) and issubclass(item_type, Enum):
+        schema.items = types.Schema(
+          type=types.Type.STRING,
+          enum=[e.name for e in item_type]
+        )
+      else:
+        schema.items = _parse_schema_from_parameter(
+            variant,
+            inspect.Parameter(
+                'item',
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=item_type,
+            ),
+            func_name,
+        )
+      
       if param.default is not inspect.Parameter.empty:
         if not _is_default_value_compatible(param.default, param.annotation):
           raise ValueError(default_value_error_msg)
@@ -287,7 +296,17 @@ def _parse_schema_from_parameter(
                 and optional_arg.__origin__ is list
             ):
               # Optional type with list, for example Optional[list[str]]
-              schema.items = schema_in_any_of.items
+              list_item_type = get_args(optional_arg)[0]
+              if inspect.isclass(list_item_type) and issubclass(list_item_type, Enum):
+                schema.type = types.Type.ARRAY
+                schema.items = types.Schema(
+                  type=types.Type.STRING,
+                  enum=[e.name for e in list_item_type]
+                )
+                schema.nullable = True
+                return schema
+              else:
+                schema.items = schema_in_any_of.items
         if (
             schema_in_any_of.model_dump_json(exclude_none=True)
             not in unique_types
